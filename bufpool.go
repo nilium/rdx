@@ -6,50 +6,36 @@ import (
 	"sync"
 )
 
-func memclr(b []byte) {
-	for i := range b {
-		b[i] = 0
-	}
-}
-
-type padbuf struct {
-	*bytes.Buffer
-	tmp [64]byte
-}
-
 var buffers = sync.Pool{
 	New: func() interface{} {
 		const mincap = 80
-		return &padbuf{Buffer: bytes.NewBuffer(make([]byte, 0, mincap))}
+		return bytes.NewBuffer(make([]byte, 0, mincap))
 	},
 }
 
-func tempbuffer(cap int) *padbuf {
-	b := buffers.Get().(*padbuf)
+func tempbuffer(cap int) *bytes.Buffer {
+	b := buffers.Get().(*bytes.Buffer)
 	b.Grow(cap)
 	return b
 }
 
-func putbuffer(b *padbuf) {
-	// This could become a problem if enormous payloads are always being sent, but should only occur when sending
-	// huge strings or arrays.
+func putbuffer(b *bytes.Buffer) {
+	// This could become a problem if enormous payloads are always being sent, but should only
+	// occur when sending huge strings or arrays.
 	const maxcap = 4096 * 8
 	if b.Cap() > maxcap {
 		return
 	}
 	b.Reset()
-	memclr(b.tmp[:])
 	buffers.Put(b)
 }
 
-func putint(buf *padbuf, n int64) {
-	b := strconv.AppendInt(buf.tmp[:0], n, 10)
+func putint(buf *bytes.Buffer, prefix byte, n int64) int64 {
+	tmp := [23]byte{prefix}
+	b := strconv.AppendInt(tmp[:1], n, 10)
 	b = append(b, "\r\n"...)
 	buf.Write(b)
-}
-
-func putfloat(buf *padbuf, f float64) {
-	buf.Write(strconv.AppendFloat(buf.tmp[:0], f, 'f', -1, 64))
+	return int64(len(b))
 }
 
 func intlen(i int64) (n int) {

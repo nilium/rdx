@@ -1,6 +1,7 @@
 package rdx
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -8,7 +9,7 @@ import (
 	"strings"
 )
 
-type Type int
+type Type uint
 
 var (
 	msgNilStr = []byte("$-1\r\n\r\n")
@@ -34,25 +35,27 @@ type (
 		Err() error
 	}
 
-	niltype struct{}
-	Int     int64
-	String  []byte
-	Array   []Msg
-	Error   string
+	nilmsg struct{}
+	Int    int64
+	String []byte
+	Array  []Msg
+	Error  string
 
-	// Encode-specific types -- when read over the wire, these will still be treated as their simplified types.
+	// Encode-specific types -- when read over the wire, these will still be treated as their
+	// simplified types.
 
-	// BulkString is a convenience type for encoding a string as a bulk string. This can be used to skip converting
-	// a string to a byte slice when writing a message.
+	// BulkString is a convenience type for encoding a string as a bulk string. This can be used
+	// to skip converting a string to a byte slice when writing a message.
 	BulkString string
 
-	// SimpleString explicitly encodes a string as a basic string instead of a bulk string. When read over the wire,
-	// all SimpleStrings are received as String to avoid type preferences on strings. If the SimpleString contains the
-	// sequence "\r\n", it is automatically promoted to a BulkString to avoid producing an error.
+	// SimpleString explicitly encodes a string as a basic string instead of a bulk string. When
+	// read over the wire, all SimpleStrings are received as String to avoid type preferences on
+	// strings. If the SimpleString contains the sequence "\r\n", it is automatically promoted
+	// to a BulkString to avoid producing an error.
 	SimpleString string
 
-	// Float64 encodes a float64 as a bulk string. This is a convenience type for skipping float-to-string
-	// conversion.
+	// Float64 encodes a float64 as a bulk string. This is a convenience type for skipping
+	// float-to-string conversion.
 	Float64 float64
 )
 
@@ -63,7 +66,7 @@ func ensure(msg Msg) Msg {
 	return msg
 }
 
-var Nil niltype
+var Nil nilmsg
 
 var (
 	ErrInvalidError     = errors.New(`rdx: error contains forbidden character`)
@@ -78,19 +81,29 @@ func (e Error) Type() Type     { return TError }
 func (e Error) String() string { return string(e) }
 func (e Error) estlen() int    { return 3 + len(e) }
 
+func (e Error) writeTo(buf *bytes.Buffer) (n int64) {
+	buf.WriteByte('-')
+	buf.WriteString(string(e))
+	buf.WriteString("\r\n")
+	return int64(len(e) + 3)
+}
+
 func (e Error) WriteTo(w io.Writer) (n int64, err error) {
 	s := string(e)
 	if strings.ContainsAny(s, "\r\n") {
 		return 0, ErrInvalidError
 	}
 
+	if buf, ok := w.(*bytes.Buffer); ok {
+		return e.writeTo(buf), nil
+	}
+
 	buf := tempbuffer(e.estlen())
-	buf.WriteByte('-')
-	buf.WriteString(s)
-	buf.WriteString("\r\n")
+	e.writeTo(buf)
 
 	n, err = buf.WriteTo(w)
 	putbuffer(buf)
+
 	return n, err
 }
 
@@ -105,16 +118,21 @@ func (s String) estlen() int {
 	return 5 + sz
 }
 
-func (s String) WriteTo(w io.Writer) (n int64, err error) {
-	oct := []byte(s)
-	sz := len(oct)
-	szlen := intlen(int64(sz))
-
-	buf := tempbuffer(5 + sz + szlen)
-	buf.WriteByte('$')
-	putint(buf, int64(sz))
-	buf.Write(oct)
+func (s String) writeTo(buf *bytes.Buffer) (n int64) {
+	n = int64(len(s))
+	n += putint(buf, '$', n) + 2
+	buf.WriteString(string(s))
 	buf.WriteString("\r\n")
+	return n
+}
+
+func (s String) WriteTo(w io.Writer) (n int64, err error) {
+	if buf, ok := w.(*bytes.Buffer); ok {
+		return s.writeTo(buf), nil
+	}
+
+	buf := tempbuffer(s.estlen())
+	s.writeTo(buf)
 
 	n, err = buf.WriteTo(w)
 	putbuffer(buf)
@@ -122,14 +140,14 @@ func (s String) WriteTo(w io.Writer) (n int64, err error) {
 	return n, err
 }
 
-var _ Msg = niltype{}
+var _ Msg = nilmsg{}
 
-func (niltype) Err() error     { return nil }
-func (niltype) Type() Type     { return TNil }
-func (niltype) String() string { return "<nil>" }
-func (niltype) estlen() int    { return 5 }
+func (nilmsg) Err() error     { return nil }
+func (nilmsg) Type() Type     { return TNil }
+func (nilmsg) String() string { return "<nil>" }
+func (nilmsg) estlen() int    { return 5 }
 
-func (niltype) WriteTo(w io.Writer) (n int64, err error) {
+func (nilmsg) WriteTo(w io.Writer) (n int64, err error) {
 	b := [...]byte{'$', '-', '1', '\r', '\n'}
 	in, err := w.Write(b[:])
 	return int64(in), err
@@ -145,8 +163,7 @@ func (i Int) estlen() int    { return 3 + intlen(int64(i)) }
 func (i Int) WriteTo(w io.Writer) (n int64, err error) {
 	i64 := int64(i)
 	buf := tempbuffer(i.estlen())
-	buf.WriteByte(':')
-	putint(buf, i64)
+	putint(buf, ':', i64)
 
 	n, err = buf.WriteTo(w)
 	putbuffer(buf)
@@ -178,23 +195,31 @@ func (a Array) estlen() int {
 	return sz
 }
 
-func (a Array) WriteTo(w io.Writer) (n int64, err error) {
-	buf := tempbuffer(a.estlen())
-
-	buf.WriteByte('*')
-	putint(buf, int64(len(a)))
-
+func (a Array) writeTo(buf *bytes.Buffer) (err error) {
+	putint(buf, '*', int64(len(a)))
 	for _, m := range a {
-		_, err = ensure(m).WriteTo(buf)
+		switch m := ensure(m).(type) {
+		case Array:
+			err = m.writeTo(buf)
+		default:
+			_, err = m.WriteTo(buf)
+		}
+
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
+	return nil
+}
 
-	n, err = buf.WriteTo(w)
-	putbuffer(buf)
+func (a Array) WriteTo(w io.Writer) (n int64, err error) {
+	buf := tempbuffer(a.estlen())
+	defer putbuffer(buf)
+	if err = a.writeTo(buf); err != nil {
+		return 0, err
+	}
 
-	return n, err
+	return buf.WriteTo(w)
 }
 
 var _ Msg = BulkString("")
@@ -209,15 +234,21 @@ func (s BulkString) estlen() int {
 	return 5 + sz
 }
 
-func (s BulkString) WriteTo(w io.Writer) (n int64, err error) {
-	sz := len(s)
-	szlen := intlen(int64(sz))
-
-	buf := tempbuffer(5 + sz + szlen)
-	buf.WriteByte('$')
-	putint(buf, int64(sz))
+func (s BulkString) writeTo(buf *bytes.Buffer) (n int64, err error) {
+	n = int64(len(s))
+	n += putint(buf, '$', n) + 2
 	buf.WriteString(string(s))
 	buf.WriteString("\r\n")
+	return n, nil
+}
+
+func (s BulkString) WriteTo(w io.Writer) (n int64, err error) {
+	if buf, ok := w.(*bytes.Buffer); ok {
+		return s.writeTo(buf)
+	}
+
+	buf := tempbuffer(s.estlen())
+	s.writeTo(buf)
 
 	n, err = buf.WriteTo(w)
 	putbuffer(buf)
@@ -240,16 +271,22 @@ func (s SimpleString) estlen() int {
 	return 5 + sz
 }
 
-func (s SimpleString) WriteTo(w io.Writer) (n int64, err error) {
-	if strings.ContainsAny(string(s), "\r\n") {
-		return BulkString(s).WriteTo(w)
-	}
-
-	buf := tempbuffer(s.estlen())
+func (s SimpleString) writeTo(buf *bytes.Buffer) (n int64, err error) {
 	buf.WriteByte('+')
 	buf.WriteString(string(s))
 	buf.WriteString("\r\n")
+	return int64(len(s) + 3), nil
+}
 
+func (s SimpleString) WriteTo(w io.Writer) (n int64, err error) {
+	if strings.ContainsAny(string(s), "\r\n") {
+		return BulkString(s).WriteTo(w)
+	} else if buf, ok := w.(*bytes.Buffer); ok {
+		return s.writeTo(buf)
+	}
+
+	buf := tempbuffer(s.estlen())
+	s.writeTo(buf)
 	n, err = buf.WriteTo(w)
 	putbuffer(buf)
 
@@ -277,7 +314,7 @@ func ToFloat(msg Msg) (float64, error) {
 }
 
 func IsA(msg Msg, typ Type) bool {
-	return ensure(msg).Type()&typ != 0
+	return ensure(msg).Type()&typ != 0 && typ != 0
 }
 
 func Write(w io.Writer, msg Msg) (n int, err error) {

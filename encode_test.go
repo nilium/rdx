@@ -2,6 +2,8 @@ package rdx_test
 
 import (
 	"bytes"
+	"io"
+	"io/ioutil"
 	"strings"
 	"testing"
 
@@ -17,18 +19,23 @@ type enctest struct {
 func (e *enctest) eval(t *testing.T, nth int) {
 	var buf bytes.Buffer
 
-	n, err := rdx.Write(&buf, e.msg)
-	if n != len(e.result) {
-		t.Errorf("[%d] Written n = %d; want %d", nth, n, len(e.result))
+	try := func(w io.Writer) {
+		n, err := rdx.Write(w, e.msg)
+		if n != len(e.result) {
+			t.Errorf("[%d ; %T] Written n = %d; want %d", nth, e.msg, n, len(e.result))
+		}
+
+		if (e.err != nil) != (err != nil) || (e.err != nil && err != nil && e.err.Error() != err.Error()) {
+			t.Errorf("[%d ; %T] Written err = %v; want %v", nth, e.msg, err, e.err)
+		}
+
+		if e.result != buf.String() {
+			t.Errorf("[%d ; %T] Wrote %q; want %q", nth, e.msg, buf.String(), e.result)
+		}
 	}
 
-	if (e.err != nil) != (err != nil) || (e.err != nil && err != nil && e.err.Error() != err.Error()) {
-		t.Errorf("[%d] Written err = %v; want %v", nth, err, e.err)
-	}
-
-	if e.result != buf.String() {
-		t.Errorf("[%d] Wrote %q; want %q", nth, buf.String(), e.result)
-	}
+	try(&buf)
+	try(ioutil.Discard)
 }
 
 func TestWrite_encoding(t *testing.T) {
@@ -47,7 +54,7 @@ func TestWrite_encoding(t *testing.T) {
 		{rdx.Int(-12345), ":-12345\r\n", nil},
 
 		{rdx.String("foo bar baz quux"), "$16\r\nfoo bar baz quux\r\n", nil},
-		{rdx.String(nil), "$0\r\n\r\n", nil},
+		{rdx.String(""), "$0\r\n\r\n", nil},
 		{rdx.String([]byte{}), "$0\r\n\r\n", nil},
 		{rdx.String([]byte{1, 2, 3}), "$3\r\n\x01\x02\x03\r\n", nil},
 
@@ -80,7 +87,6 @@ func TestWrite_encoding(t *testing.T) {
 	}
 
 	for i, e := range table {
-		t.Log(e)
 		e.eval(t, i+1)
 	}
 }
