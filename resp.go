@@ -25,39 +25,48 @@ const (
 	TString = TSimpleString | TBulkString
 )
 
-type (
-	Msg interface {
-		Type() Type
-		String() string
+// Msg is any type that can be encoded as a resp message.
+type Msg interface {
+	Type() Type
+	String() string
 
-		io.WriterTo
+	io.WriterTo
+}
 
-		Err() error
-	}
+// ErrMsg is any type that can be encoded as a resp message that represents an error.
+type ErrMsg interface {
+	Msg
+	error
+}
 
-	nilmsg struct{}
-	Int    int64
-	String []byte
-	Array  []Msg
-	Error  string
+// ToError converts the Msg, m, to an ErrMsg if it is an ErrMsg. Otherwise, it returns nil.
+func ToError(m Msg) ErrMsg {
+	err, _ := m.(ErrMsg)
+	return err
+}
 
-	// Encode-specific types -- when read over the wire, these will still be treated as their
-	// simplified types.
+type nilmsg struct{}
+type Int int64
+type String []byte
+type Array []Msg
+type Error string
 
-	// BulkString is a convenience type for encoding a string as a bulk string. This can be used
-	// to skip converting a string to a byte slice when writing a message.
-	BulkString string
+// Encode-specific types -- when read over the wire, these will still be treated as their
+// simplified types.
 
-	// SimpleString explicitly encodes a string as a basic string instead of a bulk string. When
-	// read over the wire, all SimpleStrings are received as String to avoid type preferences on
-	// strings. If the SimpleString contains the sequence "\r\n", it is automatically promoted
-	// to a BulkString to avoid producing an error.
-	SimpleString string
+// BulkString is a convenience type for encoding a string as a bulk string. This can be used
+// to skip converting a string to a byte slice when writing a message.
+type BulkString string
 
-	// Float64 encodes a float64 as a bulk string. This is a convenience type for skipping
-	// float-to-string conversion.
-	Float64 float64
-)
+// SimpleString explicitly encodes a string as a basic string instead of a bulk string. When
+// read over the wire, all SimpleStrings are received as String to avoid type preferences on
+// strings. If the SimpleString contains the sequence "\r\n", it is automatically promoted
+// to a BulkString to avoid producing an error.
+type SimpleString string
+
+// Float64 encodes a float64 as a bulk string. This is a convenience type for skipping
+// float-to-string conversion.
+type Float64 float64
 
 func ensure(msg Msg) Msg {
 	if msg == nil {
@@ -75,7 +84,6 @@ var (
 
 var _ Msg = Error("")
 
-func (e Error) Err() error     { return e }
 func (e Error) Error() string  { return string(e) }
 func (e Error) Type() Type     { return TError }
 func (e Error) String() string { return string(e) }
@@ -109,7 +117,6 @@ func (e Error) WriteTo(w io.Writer) (n int64, err error) {
 
 var _ Msg = String(nil)
 
-func (String) Err() error       { return nil }
 func (String) Type() Type       { return TBulkString }
 func (s String) String() string { return string(s) }
 func (s String) estlen() int {
@@ -142,7 +149,6 @@ func (s String) WriteTo(w io.Writer) (n int64, err error) {
 
 var _ Msg = nilmsg{}
 
-func (nilmsg) Err() error     { return nil }
 func (nilmsg) Type() Type     { return TNil }
 func (nilmsg) String() string { return "<nil>" }
 func (nilmsg) estlen() int    { return 5 }
@@ -155,7 +161,6 @@ func (nilmsg) WriteTo(w io.Writer) (n int64, err error) {
 
 var _ Msg = Int(0)
 
-func (Int) Err() error       { return nil }
 func (Int) Type() Type       { return TInt }
 func (i Int) String() string { return strconv.FormatInt(int64(i), 10) }
 func (i Int) estlen() int    { return 3 + intlen(int64(i)) }
@@ -177,7 +182,6 @@ type estlen interface {
 
 var _ Msg = Array(nil)
 
-func (Array) Err() error { return nil }
 func (Array) Type() Type { return TArray }
 
 func (a Array) String() string { return fmt.Sprint([]Msg(a)) }
@@ -224,7 +228,6 @@ func (a Array) WriteTo(w io.Writer) (n int64, err error) {
 
 var _ Msg = BulkString("")
 
-func (BulkString) Err() error       { return nil }
 func (BulkString) Type() Type       { return TBulkString }
 func (s BulkString) String() string { return string(s) }
 
@@ -258,7 +261,6 @@ func (s BulkString) WriteTo(w io.Writer) (n int64, err error) {
 
 var _ Msg = SimpleString("")
 
-func (SimpleString) Err() error       { return nil }
 func (SimpleString) Type() Type       { return TSimpleString }
 func (s SimpleString) String() string { return string(s) }
 
@@ -295,7 +297,6 @@ func (s SimpleString) WriteTo(w io.Writer) (n int64, err error) {
 
 var _ Msg = Float64(0)
 
-func (Float64) Err() error       { return nil }
 func (Float64) Type() Type       { return TSimpleString }
 func (f Float64) String() string { return strconv.FormatFloat(float64(f), 'f', -1, 64) }
 func (Float64) estlen() int      { return 23 }
