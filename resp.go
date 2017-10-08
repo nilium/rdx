@@ -45,7 +45,7 @@ func ToError(m Msg) ErrMsg {
 	return err
 }
 
-type nilmsg struct{}
+type nilmsg int
 type Int int64
 type String []byte
 type Array []Msg
@@ -75,7 +75,8 @@ func ensure(msg Msg) Msg {
 	return msg
 }
 
-var Nil nilmsg
+// Nil is a Msg representing a nil value.
+const Nil nilmsg = 0
 
 var (
 	ErrInvalidError     = errors.New(`rdx: error contains forbidden character`)
@@ -147,14 +148,16 @@ func (s String) WriteTo(w io.Writer) (n int64, err error) {
 	return n, err
 }
 
-var _ Msg = nilmsg{}
+var _ Msg = Nil
+
+var nilmsgBytes = [...]byte{'$', '-', '1', '\r', '\n'}
 
 func (nilmsg) Type() Type     { return TNil }
 func (nilmsg) String() string { return "<nil>" }
-func (nilmsg) estlen() int    { return 5 }
+func (nilmsg) estlen() int    { return len(nilmsgBytes) }
 
 func (nilmsg) WriteTo(w io.Writer) (n int64, err error) {
-	b := [...]byte{'$', '-', '1', '\r', '\n'}
+	b := nilmsgBytes // copy
 	in, err := w.Write(b[:])
 	return int64(in), err
 }
