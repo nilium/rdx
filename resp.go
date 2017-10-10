@@ -9,12 +9,14 @@ import (
 	"strings"
 )
 
+// Type is the type of a resp message.
 type Type uint
 
 var (
 	msgNilStr = []byte("$-1\r\n\r\n")
 )
 
+// Resp message types.
 const (
 	TNil Type = 1 << iota
 	TError
@@ -68,6 +70,8 @@ type SimpleString string
 // float-to-string conversion.
 type Float64 float64
 
+// ensure returns msg if it is non-nil, otherwise it returns the Nil message.
+// This is used to ensure that no Msg interface in use is nil.
 func ensure(msg Msg) Msg {
 	if msg == nil {
 		return Nil
