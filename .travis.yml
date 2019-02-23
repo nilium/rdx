@@ -1,5 +1,0 @@
-language: go
-go_import_path: go.spiff.io/rdx
-go:
-- 1.9
-- tip
